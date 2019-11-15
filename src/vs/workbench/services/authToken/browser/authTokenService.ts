@@ -12,7 +12,6 @@ import { URI } from 'vs/base/common/uri';
 import { IEnvironmentService } from 'vs/platform/environment/common/environment';
 import { IQuickInputService } from 'vs/platform/quickinput/common/quickInput';
 import { INotificationService } from 'vs/platform/notification/common/notification';
-import { UserAgentApplication } from 'Msal';
 
 const SERVICE_NAME = 'VS Code';
 const ACCOUNT = 'MyAccount';
@@ -28,7 +27,7 @@ export class AuthTokenService extends Disposable implements IAuthTokenService {
 
 	readonly _onDidGetCallback: Emitter<URI> = this._register(new Emitter<URI>());
 
-	private _msalInstance: UserAgentApplication | undefined;
+	private _msalInstance: any | undefined; // TODO rmacfarlane add typings
 	private _loadMsal: Promise<void>;
 
 	constructor(
