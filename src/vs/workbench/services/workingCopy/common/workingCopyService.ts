@@ -9,6 +9,8 @@ import { Event, Emitter } from 'vs/base/common/event';
 import { URI } from 'vs/base/common/uri';
 import { Disposable, IDisposable, toDisposable, DisposableStore, dispose } from 'vs/base/common/lifecycle';
 import { TernarySearchTree } from 'vs/base/common/map';
+import { IFileService } from 'vs/platform/files/common/files';
+import { Schemas } from 'vs/base/common/network';
 
 export const enum WorkingCopyCapabilities {
 
@@ -59,6 +61,29 @@ export interface ISaveOptions {
 	 * Instructs the save operation to skip any save participants.
 	 */
 	skipSaveParticipants?: boolean;
+}
+
+export enum WorkingCopyFilter {
+
+	/**
+	 * Only working copies that are untitled.
+	 */
+	UNTITLED,
+
+	/**
+	 * Only working copies that have a registered
+	 * file system provider for.
+	 */
+	FILESYSTEM
+}
+
+export interface ISaveAllOptions extends ISaveOptions {
+
+	/**
+	 * An optional filter to apply for the dirty
+	 * working copies to save.
+	 */
+	filter?: WorkingCopyFilter;
 }
 
 export interface IRevertOptions {
@@ -122,6 +147,13 @@ export interface IWorkingCopyService {
 	//#endregion
 
 
+	//#region Save/Revert
+
+	saveAll(options?: ISaveAllOptions): Promise<boolean>;
+
+	//#endregion
+
+
 	//#region Registry
 
 	registerWorkingCopy(workingCopy: IWorkingCopy): IDisposable;
@@ -132,6 +164,10 @@ export interface IWorkingCopyService {
 export class WorkingCopyService extends Disposable implements IWorkingCopyService {
 
 	_serviceBrand: undefined;
+
+	constructor(@IFileService private readonly fileService: IFileService) {
+		super();
+	}
 
 	//#region Dirty Tracking
 
@@ -199,6 +235,27 @@ export class WorkingCopyService extends Disposable implements IWorkingCopyServic
 		}
 
 		return totalDirtyCount;
+	}
+
+	//#endregion
+
+
+	//#region Save/Revert
+
+	async saveAll(options?: ISaveAllOptions): Promise<boolean> {
+		const result = await Promise.all(this.getDirty().map(async copy => {
+			if (options?.filter === WorkingCopyFilter.UNTITLED && copy.resource.scheme !== Schemas.untitled) {
+				return undefined; // only untitled
+			}
+
+			if (options?.filter === WorkingCopyFilter.FILESYSTEM && !this.fileService.canHandleResource(copy.resource)) {
+				return undefined; // only copys with registered file system provider
+			}
+
+			return copy.save(options);
+		}));
+
+		return result.every(res => !!res);
 	}
 
 	//#endregion

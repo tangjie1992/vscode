@@ -15,7 +15,7 @@ import { ExplorerFocusCondition, TextFileContentProvider, VIEWLET_ID, IExplorerS
 import { ExplorerViewlet } from 'vs/workbench/contrib/files/browser/explorerViewlet';
 import { IClipboardService } from 'vs/platform/clipboard/common/clipboardService';
 import { ITextFileService } from 'vs/workbench/services/textfile/common/textfiles';
-import { ISaveOptions } from 'vs/workbench/services/workingCopy/common/workingCopyService';
+import { ISaveOptions, IWorkingCopyService, WorkingCopyFilter } from 'vs/workbench/services/workingCopy/common/workingCopyService';
 import { toErrorMessage } from 'vs/base/common/errorMessage';
 import { IListService } from 'vs/platform/list/browser/listService';
 import { CommandsRegistry } from 'vs/platform/commands/common/commands';
@@ -482,6 +482,31 @@ CommandsRegistry.registerCommand({
 	}
 });
 
+async function saveEditors(accessor: ServicesAccessor, options: ISaveOptions): Promise<boolean> {
+	const listService = accessor.get(IListService);
+	const editorGroupsService = accessor.get(IEditorGroupsService);
+	const notificationService = accessor.get(INotificationService);
+
+	const saveableEditors = getMultiSelectedEditors(listService, editorGroupsService).filter(({ editor }) => !editor.isReadonly());
+	if (saveableEditors.length) {
+		try {
+			await Promise.all(saveableEditors.map(async ({ groupId, editor }) => {
+
+				// Use save as a hint to pin the editor
+				editorGroupsService.getGroup(groupId)?.pinEditor(editor);
+
+				return editor.save(options);
+			}));
+		} catch (error) {
+			notificationService.error(nls.localize('genericSaveError', "Failed to save '{0}': {1}", saveableEditors.map(({ editor }) => editor.getName()).join(', '), toErrorMessage(error, false)));
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
 KeybindingsRegistry.registerCommandAndKeybindingRule({
 	id: SAVE_FILE_AS_COMMAND_ID,
 	weight: KeybindingWeight.WorkbenchContrib,
@@ -500,52 +525,13 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	}
 });
 
-async function saveEditors(accessor: ServicesAccessor, options: ISaveOptions): Promise<boolean> {
-	const listService = accessor.get(IListService);
-	const editorGroupsService = accessor.get(IEditorGroupsService);
-	const notificationService = accessor.get(INotificationService);
-
-	const editors = getMultiSelectedEditors(listService, editorGroupsService);
-	if (editors.length) {
-		try {
-			await Promise.all(editors.map(async ({ groupId, editor }) => {
-
-				// Use save as a hint to pin the editor
-				editorGroupsService.getGroup(groupId)?.pinEditor(editor);
-
-				return editor.save(options);
-			}));
-		} catch (error) {
-			notificationService.error(nls.localize('genericSaveError', "Failed to save '{0}': {1}", editors.map(({ editor }) => editor.getName()).join(', '), toErrorMessage(error, false)));
-		}
-
-		return true;
-	}
-
-	return false;
-}
-
 KeybindingsRegistry.registerCommandAndKeybindingRule({
 	when: undefined,
 	weight: KeybindingWeight.WorkbenchContrib,
 	primary: KeyMod.CtrlCmd | KeyCode.KEY_S,
 	id: SAVE_FILE_COMMAND_ID,
 	handler: async (accessor, resource: URI | object) => {
-		const saved = await saveEditors(accessor, { force: true });
-		if (saved) {
-			return;
-		}
-
-		// Fallback to classic save
-		const listService = accessor.get(IListService);
-		const editorService = accessor.get(IEditorService);
-		const resources = getMultiSelectedResources(resource, listService, editorService);
-
-		if (resources.length === 1) {
-			// If only one resource is selected explictly call save since the behavior is a bit different than save all #41841
-			return save(resources[0], false, undefined, editorService, accessor.get(IFileService), accessor.get(IUntitledTextEditorService), accessor.get(ITextFileService), accessor.get(IEditorGroupsService), accessor.get(IWorkbenchEnvironmentService));
-		}
-		return saveAll(resources, editorService, accessor.get(IUntitledTextEditorService), accessor.get(ITextFileService), accessor.get(IEditorGroupsService));
+		return saveEditors(accessor, { force: true });
 	}
 });
 
@@ -556,18 +542,7 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	win: { primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KEY_K, KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KEY_S) },
 	id: SAVE_FILE_WITHOUT_FORMATTING_COMMAND_ID,
 	handler: async accessor => {
-		const saved = await saveEditors(accessor, { force: true, skipSaveParticipants: true });
-		if (saved) {
-			return;
-		}
-
-		// Fallback to classic save
-		const editorService = accessor.get(IEditorService);
-
-		const resource = toResource(editorService.activeEditor, { supportSideBySide: SideBySideEditor.MASTER });
-		if (resource) {
-			return save(resource, false, { skipSaveParticipants: true }, editorService, accessor.get(IFileService), accessor.get(IUntitledTextEditorService), accessor.get(ITextFileService), accessor.get(IEditorGroupsService), accessor.get(IWorkbenchEnvironmentService));
-		}
+		return saveEditors(accessor, { force: true, skipSaveParticipants: true });
 	}
 });
 
@@ -608,8 +583,12 @@ CommandsRegistry.registerCommand({
 
 CommandsRegistry.registerCommand({
 	id: SAVE_FILES_COMMAND_ID,
-	handler: (accessor) => {
-		return saveAll(false, accessor.get(IEditorService), accessor.get(IUntitledTextEditorService), accessor.get(ITextFileService), accessor.get(IEditorGroupsService));
+	handler: accessor => {
+		const workingCopyService = accessor.get(IWorkingCopyService);
+
+		return workingCopyService.saveAll({
+			filter: WorkingCopyFilter.FILESYSTEM
+		});
 	}
 });
 
