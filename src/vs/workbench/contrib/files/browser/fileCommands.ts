@@ -75,7 +75,7 @@ export const SAVE_FILES_COMMAND_ID = 'workbench.action.files.saveFiles';
 
 export const OpenEditorsGroupContext = new RawContextKey<boolean>('groupFocusedInOpenEditors', false);
 export const DirtyEditorContext = new RawContextKey<boolean>('dirtyEditor', false);
-export const ReadonlyEditorContext = new RawContextKey<boolean>('readonlyEditor', false);
+export const SaveableEditorContext = new RawContextKey<boolean>('saveableEditor', false);
 export const ResourceSelectedForCompareContext = new RawContextKey<boolean>('resourceSelectedForCompare', false);
 
 export const REMOVE_ROOT_FOLDER_COMMAND_ID = 'removeRootFolder';
@@ -294,10 +294,13 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 
 		// Set side input
 		if (resources.length) {
-			const resolved = await fileService.resolveAll(resources.map(resource => ({ resource })));
+			const untitledResources = resources.filter(resource => resource.scheme === Schemas.untitled);
+			const fileResources = resources.filter(resource => resource.scheme !== Schemas.untitled);
+
+			const resolved = await fileService.resolveAll(fileResources.map(resource => ({ resource })));
 			const editors = resolved.filter(r => r.stat && r.success && !r.stat.isDirectory).map(r => ({
 				resource: r.stat!.resource
-			}));
+			})).concat(...untitledResources.map(untitledResource => ({ resource: untitledResource })));
 
 			await editorService.openEditors(editors, SIDE_GROUP);
 		}

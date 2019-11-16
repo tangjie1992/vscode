@@ -125,6 +125,10 @@ export class UntitledTextEditorInput extends EditorInput implements IEncodingSup
 		}
 	}
 
+	isReadonly(): boolean {
+		return false;
+	}
+
 	isDirty(): boolean {
 		if (this.cachedModel) {
 			return this.cachedModel.isDirty();
