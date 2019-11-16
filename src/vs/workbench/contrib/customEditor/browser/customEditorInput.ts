@@ -117,6 +117,10 @@ export class CustomFileEditorInput extends LazilyResolvedWebviewEditorInput {
 		this._register(model.onDidChangeDirty(() => this._onDidChangeDirty.fire()));
 	}
 
+	public isReadonly(): boolean {
+		return false;
+	}
+
 	public isDirty(): boolean {
 		return this._model ? this._model.isDirty() : false;
 	}

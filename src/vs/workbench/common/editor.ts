@@ -300,6 +300,11 @@ export interface IEditorInput extends IDisposable {
 	resolve(): Promise<IEditorModel | null>;
 
 	/**
+	 * Returns if this input is readonly or not.
+	 */
+	isReadonly(): boolean;
+
+	/**
 	 * Returns if this input is dirty or not.
 	 */
 	isDirty(): boolean;
@@ -400,6 +405,14 @@ export abstract class EditorInput extends Disposable implements IEditorInput {
 	 * override to provide a meaningful model.
 	 */
 	abstract resolve(): Promise<IEditorModel | null>;
+
+	/**
+	 * Returns if this input is readonly or not.
+	 */
+	isReadonly(): boolean {
+		// Subclasses need to explicitly opt-in to being editable.
+		return !this.isDirty();
+	}
 
 	/**
 	 * An editor that is dirty will be asked to be saved once it closes.
@@ -540,6 +553,10 @@ export class SideBySideEditorInput extends EditorInput {
 
 	get details(): EditorInput {
 		return this._details;
+	}
+
+	isReadonly(): boolean {
+		return this.master.isReadonly();
 	}
 
 	isDirty(): boolean {

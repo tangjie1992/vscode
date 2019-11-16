@@ -75,6 +75,7 @@ export const SAVE_FILES_COMMAND_ID = 'workbench.action.files.saveFiles';
 
 export const OpenEditorsGroupContext = new RawContextKey<boolean>('groupFocusedInOpenEditors', false);
 export const DirtyEditorContext = new RawContextKey<boolean>('dirtyEditor', false);
+export const ReadonlyEditorContext = new RawContextKey<boolean>('readonlyEditor', false);
 export const ResourceSelectedForCompareContext = new RawContextKey<boolean>('resourceSelectedForCompare', false);
 
 export const REMOVE_ROOT_FOLDER_COMMAND_ID = 'removeRootFolder';
@@ -272,7 +273,7 @@ CommandsRegistry.registerCommand({
 					return editor.revert({ force: true });
 				}));
 			} catch (error) {
-				notificationService.error(nls.localize('genericRevertResourcesError', "Failed to revert '{0}': {1}", editors.map(({ editor }) => editor.getName()).join(', '), toErrorMessage(error, false)));
+				notificationService.error(nls.localize('genericRevertError', "Failed to revert '{0}': {1}", editors.map(({ editor }) => editor.getName()).join(', '), toErrorMessage(error, false)));
 			}
 		}
 	}
@@ -496,33 +497,44 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	}
 });
 
+async function saveEditors(accessor: ServicesAccessor, options: ISaveOptions): Promise<boolean> {
+	const listService = accessor.get(IListService);
+	const editorGroupsService = accessor.get(IEditorGroupsService);
+	const notificationService = accessor.get(INotificationService);
+
+	const editors = getMultiSelectedEditors(listService, editorGroupsService);
+	if (editors.length) {
+		try {
+			await Promise.all(editors.map(async ({ groupId, editor }) => {
+
+				// Use save as a hint to pin the editor
+				editorGroupsService.getGroup(groupId)?.pinEditor(editor);
+
+				return editor.save(options);
+			}));
+		} catch (error) {
+			notificationService.error(nls.localize('genericSaveError', "Failed to save '{0}': {1}", editors.map(({ editor }) => editor.getName()).join(', '), toErrorMessage(error, false)));
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
 KeybindingsRegistry.registerCommandAndKeybindingRule({
 	when: undefined,
 	weight: KeybindingWeight.WorkbenchContrib,
 	primary: KeyMod.CtrlCmd | KeyCode.KEY_S,
 	id: SAVE_FILE_COMMAND_ID,
 	handler: async (accessor, resource: URI | object) => {
-		const listService = accessor.get(IListService);
-		const editorGroupsService = accessor.get(IEditorGroupsService);
-		const notificationService = accessor.get(INotificationService);
-
-		const editors = getMultiSelectedEditors(listService, editorGroupsService);
-		if (editors.length && !editors.some(({ editor }) => editor.getResource()?.scheme === Schemas.untitled)) {
-			try {
-				await Promise.all(editors.map(async ({ groupId, editor }) => {
-
-					// Use save as a hint to pin the editor
-					editorGroupsService.getGroup(groupId)?.pinEditor(editor);
-
-					return editor.save({ force: true });
-				}));
-			} catch (error) {
-				notificationService.error(nls.localize('genericRevertResourcesError', "Failed to revert '{0}': {1}", editors.map(({ editor }) => editor.getName()).join(', '), toErrorMessage(error, false)));
-			}
-
+		const saved = await saveEditors(accessor, { force: true });
+		if (saved) {
 			return;
 		}
 
+		// Fallback to classic save
+		const listService = accessor.get(IListService);
 		const editorService = accessor.get(IEditorService);
 		const resources = getMultiSelectedResources(resource, listService, editorService);
 
@@ -540,15 +552,19 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KEY_K, KeyCode.KEY_S),
 	win: { primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KEY_K, KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KEY_S) },
 	id: SAVE_FILE_WITHOUT_FORMATTING_COMMAND_ID,
-	handler: accessor => {
+	handler: async accessor => {
+		const saved = await saveEditors(accessor, { force: true, skipSaveParticipants: true });
+		if (saved) {
+			return;
+		}
+
+		// Fallback to classic save
 		const editorService = accessor.get(IEditorService);
 
 		const resource = toResource(editorService.activeEditor, { supportSideBySide: SideBySideEditor.MASTER });
 		if (resource) {
 			return save(resource, false, { skipSaveParticipants: true }, editorService, accessor.get(IFileService), accessor.get(IUntitledTextEditorService), accessor.get(ITextFileService), accessor.get(IEditorGroupsService), accessor.get(IWorkbenchEnvironmentService));
 		}
-
-		return undefined;
 	}
 });
 

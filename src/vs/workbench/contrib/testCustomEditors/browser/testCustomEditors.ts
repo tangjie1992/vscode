@@ -160,6 +160,10 @@ class TestCustomEditorInput extends EditorInput implements IWorkingCopy {
 		}
 	}
 
+	isReadonly(): boolean {
+		return false;
+	}
+
 	isDirty(): boolean {
 		return this.dirty;
 	}

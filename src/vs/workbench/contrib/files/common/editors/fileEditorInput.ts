@@ -11,7 +11,7 @@ import { EncodingMode, EditorInput, IFileEditorInput, ITextEditorModel, Verbosit
 import { IRevertOptions } from 'vs/workbench/services/workingCopy/common/workingCopyService';
 import { TextFileEditorModel } from 'vs/workbench/services/textfile/common/textFileEditorModel';
 import { BinaryEditorModel } from 'vs/workbench/common/editor/binaryEditorModel';
-import { FileOperationError, FileOperationResult, IFileService } from 'vs/platform/files/common/files';
+import { FileOperationError, FileOperationResult, IFileService, FileSystemProviderCapabilities } from 'vs/platform/files/common/files';
 import { ITextFileService, ModelState, TextFileModelChangeEvent, LoadReason, TextFileOperationError, TextFileOperationResult, ITextFileSaveOptions } from 'vs/workbench/services/textfile/common/textfiles';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 import { IReference } from 'vs/base/common/lifecycle';
@@ -225,6 +225,10 @@ export class FileEditorInput extends EditorInput implements IFileEditorInput {
 		}
 
 		return label;
+	}
+
+	isReadonly(): boolean {
+		return this.fileService.hasCapability(this.resource, FileSystemProviderCapabilities.Readonly);
 	}
 
 	isDirty(): boolean {
