@@ -15,7 +15,7 @@ import { ExplorerFocusCondition, TextFileContentProvider, VIEWLET_ID, IExplorerS
 import { ExplorerViewlet } from 'vs/workbench/contrib/files/browser/explorerViewlet';
 import { IClipboardService } from 'vs/platform/clipboard/common/clipboardService';
 import { ITextFileService } from 'vs/workbench/services/textfile/common/textfiles';
-import { ISaveOptions, IWorkingCopyService, WorkingCopyFilter } from 'vs/workbench/services/workingCopy/common/workingCopyService';
+import { ISaveOptions, IWorkingCopyService } from 'vs/workbench/services/workingCopy/common/workingCopyService';
 import { toErrorMessage } from 'vs/base/common/errorMessage';
 import { IListService } from 'vs/platform/list/browser/listService';
 import { CommandsRegistry } from 'vs/platform/commands/common/commands';
@@ -508,24 +508,6 @@ async function saveEditors(accessor: ServicesAccessor, options: ISaveOptions): P
 }
 
 KeybindingsRegistry.registerCommandAndKeybindingRule({
-	id: SAVE_FILE_AS_COMMAND_ID,
-	weight: KeybindingWeight.WorkbenchContrib,
-	when: undefined,
-	primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KEY_S,
-	handler: (accessor, resourceOrObject: URI | object | { from: string }) => {
-		const editorService = accessor.get(IEditorService);
-		let resource: URI | null = null;
-		if (resourceOrObject && 'from' in resourceOrObject && resourceOrObject.from === 'menu') {
-			resource = withUndefinedAsNull(toResource(editorService.activeEditor));
-		} else {
-			resource = withUndefinedAsNull(getResourceForCommand(resourceOrObject, accessor.get(IListService), editorService));
-		}
-
-		return save(resource, true, undefined, editorService, accessor.get(IFileService), accessor.get(IUntitledTextEditorService), accessor.get(ITextFileService), accessor.get(IEditorGroupsService), accessor.get(IWorkbenchEnvironmentService));
-	}
-});
-
-KeybindingsRegistry.registerCommandAndKeybindingRule({
 	when: undefined,
 	weight: KeybindingWeight.WorkbenchContrib,
 	primary: KeyMod.CtrlCmd | KeyCode.KEY_S,
@@ -543,6 +525,24 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	id: SAVE_FILE_WITHOUT_FORMATTING_COMMAND_ID,
 	handler: async accessor => {
 		return saveEditors(accessor, { force: true, skipSaveParticipants: true });
+	}
+});
+
+KeybindingsRegistry.registerCommandAndKeybindingRule({
+	id: SAVE_FILE_AS_COMMAND_ID,
+	weight: KeybindingWeight.WorkbenchContrib,
+	when: undefined,
+	primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KEY_S,
+	handler: (accessor, resourceOrObject: URI | object | { from: string }) => {
+		const editorService = accessor.get(IEditorService);
+		let resource: URI | null = null;
+		if (resourceOrObject && 'from' in resourceOrObject && resourceOrObject.from === 'menu') {
+			resource = withUndefinedAsNull(toResource(editorService.activeEditor));
+		} else {
+			resource = withUndefinedAsNull(getResourceForCommand(resourceOrObject, accessor.get(IListService), editorService));
+		}
+
+		return save(resource, true, undefined, editorService, accessor.get(IFileService), accessor.get(IUntitledTextEditorService), accessor.get(ITextFileService), accessor.get(IEditorGroupsService), accessor.get(IWorkbenchEnvironmentService));
 	}
 });
 
@@ -586,9 +586,7 @@ CommandsRegistry.registerCommand({
 	handler: accessor => {
 		const workingCopyService = accessor.get(IWorkingCopyService);
 
-		return workingCopyService.saveAll({
-			filter: WorkingCopyFilter.FILESYSTEM
-		});
+		return workingCopyService.saveAll();
 	}
 });
 

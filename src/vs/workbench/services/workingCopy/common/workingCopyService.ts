@@ -9,8 +9,6 @@ import { Event, Emitter } from 'vs/base/common/event';
 import { URI } from 'vs/base/common/uri';
 import { Disposable, IDisposable, toDisposable, DisposableStore, dispose } from 'vs/base/common/lifecycle';
 import { TernarySearchTree } from 'vs/base/common/map';
-import { IFileService } from 'vs/platform/files/common/files';
-import { Schemas } from 'vs/base/common/network';
 
 export const enum WorkingCopyCapabilities {
 
@@ -18,7 +16,14 @@ export const enum WorkingCopyCapabilities {
 	 * Signals that the working copy participates
 	 * in auto saving as configured by the user.
 	 */
-	AutoSave = 1 << 1
+	AutoSave = 1 << 1,
+
+	/**
+	 * Untitled working copies are not backed by
+	 * a resource in the file system and may trigger
+	 * a file dialog when saving.
+	 */
+	Untitled = 1 << 2
 }
 
 export const enum SaveReason {
@@ -63,27 +68,15 @@ export interface ISaveOptions {
 	skipSaveParticipants?: boolean;
 }
 
-export enum WorkingCopyFilter {
-
-	/**
-	 * Only working copies that are untitled.
-	 */
-	UNTITLED,
-
-	/**
-	 * Only working copies that have a registered
-	 * file system provider for.
-	 */
-	FILESYSTEM
-}
-
 export interface ISaveAllOptions extends ISaveOptions {
 
 	/**
-	 * An optional filter to apply for the dirty
-	 * working copies to save.
+	 * Wether to include any untitled working copies when
+	 * saving all. Untitled working copies may trigger
+	 * a dialog to ask for a path so they are not included
+	 * by default.
 	 */
-	filter?: WorkingCopyFilter;
+	includeUntitled?: boolean;
 }
 
 export interface IRevertOptions {
@@ -149,7 +142,7 @@ export interface IWorkingCopyService {
 
 	//#region Save/Revert
 
-	saveAll(options?: ISaveAllOptions): Promise<boolean>;
+	saveAll(): Promise<boolean>;
 
 	//#endregion
 
@@ -164,10 +157,6 @@ export interface IWorkingCopyService {
 export class WorkingCopyService extends Disposable implements IWorkingCopyService {
 
 	_serviceBrand: undefined;
-
-	constructor(@IFileService private readonly fileService: IFileService) {
-		super();
-	}
 
 	//#region Dirty Tracking
 
@@ -243,16 +232,12 @@ export class WorkingCopyService extends Disposable implements IWorkingCopyServic
 	//#region Save/Revert
 
 	async saveAll(options?: ISaveAllOptions): Promise<boolean> {
-		const result = await Promise.all(this.getDirty().map(async copy => {
-			if (options?.filter === WorkingCopyFilter.UNTITLED && copy.resource.scheme !== Schemas.untitled) {
+		const result = await Promise.all(this.getDirty().map(async workingCopy => {
+			if (!options?.includeUntitled && !!(workingCopy.capabilities & WorkingCopyCapabilities.Untitled)) {
 				return undefined; // only untitled
 			}
 
-			if (options?.filter === WorkingCopyFilter.FILESYSTEM && !this.fileService.canHandleResource(copy.resource)) {
-				return undefined; // only copys with registered file system provider
-			}
-
-			return copy.save(options);
+			return workingCopy.save(options);
 		}));
 
 		return result.every(res => !!res);
