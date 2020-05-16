@@ -82,6 +82,7 @@ export class ExtensionHostProfileService extends Disposable implements IExtensio
 		if (visible) {
 			const indicator: IStatusbarEntry = {
 				text: '$(sync~spin) ' + nls.localize('profilingExtensionHost', "Profiling Extension Host"),
+				ariaLabel: nls.localize('profilingExtensionHost', "Profiling Extension Host"),
 				tooltip: nls.localize('selectAndStartDebug', "Click to stop profiling."),
 				command: 'workbench.action.extensionHostProfilder.stop'
 			};
@@ -112,7 +113,7 @@ export class ExtensionHostProfileService extends Disposable implements IExtensio
 			return null;
 		}
 
-		const inspectPort = await this._extensionService.getInspectPort(false);
+		const inspectPort = await this._extensionService.getInspectPort(true);
 		if (!inspectPort) {
 			return this._dialogService.confirm({
 				type: 'info',

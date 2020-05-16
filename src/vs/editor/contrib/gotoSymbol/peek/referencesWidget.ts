@@ -6,6 +6,7 @@
 import 'vs/css!./referencesWidget';
 import * as dom from 'vs/base/browser/dom';
 import { IMouseEvent } from 'vs/base/browser/mouseEvent';
+import { GestureEvent } from 'vs/base/browser/touch';
 import { Orientation } from 'vs/base/browser/ui/sash/sash';
 import { Color } from 'vs/base/common/color';
 import { Emitter, Event } from 'vs/base/common/event';
@@ -16,23 +17,23 @@ import { ICodeEditor } from 'vs/editor/browser/editorBrowser';
 import { EmbeddedCodeEditorWidget } from 'vs/editor/browser/widget/embeddedCodeEditorWidget';
 import { IEditorOptions } from 'vs/editor/common/config/editorOptions';
 import { IRange, Range } from 'vs/editor/common/core/range';
-import * as editorCommon from 'vs/editor/common/editorCommon';
+import { ScrollType } from 'vs/editor/common/editorCommon';
 import { IModelDeltaDecoration, TrackedRangeStickiness } from 'vs/editor/common/model';
 import { ModelDecorationOptions, TextModel } from 'vs/editor/common/model/textModel';
 import { Location } from 'vs/editor/common/modes';
 import { ITextEditorModel, ITextModelService } from 'vs/editor/common/services/resolverService';
-import { AriaProvider, DataSource, Delegate, FileReferencesRenderer, OneReferenceRenderer, TreeElement, StringRepresentationProvider, IdentityProvider } from 'vs/editor/contrib/gotoSymbol/peek/referencesTree';
+import { AccessibilityProvider, DataSource, Delegate, FileReferencesRenderer, OneReferenceRenderer, TreeElement, StringRepresentationProvider, IdentityProvider } from 'vs/editor/contrib/gotoSymbol/peek/referencesTree';
 import * as nls from 'vs/nls';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 import { ILabelService } from 'vs/platform/label/common/label';
-import { WorkbenchAsyncDataTree } from 'vs/platform/list/browser/listService';
+import { WorkbenchAsyncDataTree, IWorkbenchAsyncDataTreeOptions } from 'vs/platform/list/browser/listService';
 import { activeContrastBorder } from 'vs/platform/theme/common/colorRegistry';
-import { ITheme, IThemeService, registerThemingParticipant } from 'vs/platform/theme/common/themeService';
+import { IColorTheme, IThemeService, registerThemingParticipant } from 'vs/platform/theme/common/themeService';
 import * as peekView from 'vs/editor/contrib/peekView/peekView';
 import { FileReferences, OneReference, ReferencesModel } from '../referencesModel';
-import { IAsyncDataTreeOptions } from 'vs/base/browser/ui/tree/asyncDataTree';
 import { FuzzyScore } from 'vs/base/common/filters';
 import { SplitView, Sizing } from 'vs/base/browser/ui/splitview/splitview';
+import { IUndoRedoService } from 'vs/platform/undoRedo/common/undoRedo';
 
 
 class DecorationsManager implements IDisposable {
@@ -181,6 +182,8 @@ export interface SelectionEvent {
 	readonly element?: Location;
 }
 
+class ReferencesTree extends WorkbenchAsyncDataTree<ReferencesModel | FileReferences, TreeElement, FuzzyScore> { }
+
 /**
  * ZoneWidget that is shown inside the editor
  */
@@ -195,7 +198,7 @@ export class ReferenceWidget extends peekView.PeekViewWidget {
 	private readonly _onDidSelectReference = new Emitter<SelectionEvent>();
 	readonly onDidSelectReference = this._onDidSelectReference.event;
 
-	private _tree!: WorkbenchAsyncDataTree<ReferencesModel | FileReferences, TreeElement, FuzzyScore>;
+	private _tree!: ReferencesTree;
 	private _treeContainer!: HTMLElement;
 	private _splitView!: SplitView;
 	private _preview!: ICodeEditor;
@@ -213,12 +216,13 @@ export class ReferenceWidget extends peekView.PeekViewWidget {
 		@ITextModelService private readonly _textModelResolverService: ITextModelService,
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
 		@peekView.IPeekViewService private readonly _peekViewService: peekView.IPeekViewService,
-		@ILabelService private readonly _uriLabel: ILabelService
+		@ILabelService private readonly _uriLabel: ILabelService,
+		@IUndoRedoService private readonly _undoRedoService: IUndoRedoService,
 	) {
 		super(editor, { showFrame: false, showArrow: true, isResizeable: true, isAccessible: true });
 
-		this._applyTheme(themeService.getTheme());
-		this._callOnDispose.add(themeService.onThemeChange(this._applyTheme.bind(this)));
+		this._applyTheme(themeService.getColorTheme());
+		this._callOnDispose.add(themeService.onDidColorThemeChange(this._applyTheme.bind(this)));
 		this._peekViewService.addExclusiveWidget(editor, this);
 		this.create();
 	}
@@ -227,7 +231,6 @@ export class ReferenceWidget extends peekView.PeekViewWidget {
 		this.setModel(undefined);
 		this._callOnDispose.dispose();
 		this._disposeOnNewModel.dispose();
-		this._preview.setModel(null); // drop all view-zones, workaround for https://github.com/microsoft/vscode/issues/84726
 		dispose(this._preview);
 		dispose(this._previewNotAvailableMessage);
 		dispose(this._tree);
@@ -236,7 +239,7 @@ export class ReferenceWidget extends peekView.PeekViewWidget {
 		super.dispose();
 	}
 
-	private _applyTheme(theme: ITheme) {
+	private _applyTheme(theme: IColorTheme) {
 		const borderColor = theme.getColor(peekView.peekViewBorder) || Color.transparent;
 		this.style({
 			arrowColor: borderColor,
@@ -248,12 +251,20 @@ export class ReferenceWidget extends peekView.PeekViewWidget {
 	}
 
 	show(where: IRange) {
-		this.editor.revealRangeInCenterIfOutsideViewport(where, editorCommon.ScrollType.Smooth);
+		this.editor.revealRangeInCenterIfOutsideViewport(where, ScrollType.Smooth);
 		super.show(where, this.layoutData.heightInLines || 18);
 	}
 
-	focus(): void {
+	focusOnReferenceTree(): void {
 		this._tree.domFocus();
+	}
+
+	focusOnPreviewEditor(): void {
+		this._preview.focus();
+	}
+
+	isPreviewEditorFocused(): boolean {
+		return this._preview.hasTextFocus();
 	}
 
 	protected _onTitleClick(e: IMouseEvent): void {
@@ -284,7 +295,8 @@ export class ReferenceWidget extends peekView.PeekViewWidget {
 				horizontal: 'auto',
 				useShadows: true,
 				verticalHasArrows: false,
-				horizontalHasArrows: false
+				horizontalHasArrows: false,
+				alwaysConsumeMouseWheel: false
 			},
 			overviewRulerLanes: 2,
 			fixedOverflowWidgets: true,
@@ -294,19 +306,21 @@ export class ReferenceWidget extends peekView.PeekViewWidget {
 		};
 		this._preview = this._instantiationService.createInstance(EmbeddedCodeEditorWidget, this._previewContainer, options, this.editor);
 		dom.hide(this._previewContainer);
-		this._previewNotAvailableMessage = TextModel.createFromString(nls.localize('missingPreviewMessage', "no preview available"));
+		this._previewNotAvailableMessage = new TextModel(nls.localize('missingPreviewMessage', "no preview available"), TextModel.DEFAULT_CREATION_OPTIONS, null, null, this._undoRedoService);
 
 		// tree
 		this._treeContainer = dom.append(containerElement, dom.$('div.ref-tree.inline'));
-		const treeOptions: IAsyncDataTreeOptions<TreeElement, FuzzyScore> = {
-			ariaLabel: nls.localize('treeAriaLabel', "References"),
+		const treeOptions: IWorkbenchAsyncDataTreeOptions<TreeElement, FuzzyScore> = {
 			keyboardSupport: this._defaultTreeKeyboardSupport,
-			accessibilityProvider: new AriaProvider(),
+			accessibilityProvider: new AccessibilityProvider(),
 			keyboardNavigationLabelProvider: this._instantiationService.createInstance(StringRepresentationProvider),
-			identityProvider: new IdentityProvider()
+			identityProvider: new IdentityProvider(),
+			overrideStyles: {
+				listBackground: peekView.peekViewResultsBackground
+			}
 		};
-		this._tree = this._instantiationService.createInstance<typeof WorkbenchAsyncDataTree, WorkbenchAsyncDataTree<ReferencesModel | FileReferences, TreeElement, FuzzyScore>>(
-			WorkbenchAsyncDataTree,
+		this._tree = this._instantiationService.createInstance(
+			ReferencesTree,
 			'ReferencesWidget',
 			this._treeContainer,
 			new Delegate(),
@@ -315,7 +329,7 @@ export class ReferenceWidget extends peekView.PeekViewWidget {
 				this._instantiationService.createInstance(OneReferenceRenderer),
 			],
 			this._instantiationService.createInstance(DataSource),
-			treeOptions
+			treeOptions,
 		);
 
 		// split stuff
@@ -363,8 +377,11 @@ export class ReferenceWidget extends peekView.PeekViewWidget {
 			if (e.browserEvent instanceof MouseEvent && (e.browserEvent.ctrlKey || e.browserEvent.metaKey || e.browserEvent.altKey)) {
 				// modifier-click -> open to the side
 				onEvent(e.elements[0], 'side');
-			} else if (e.browserEvent instanceof KeyboardEvent || (e.browserEvent instanceof MouseEvent && e.browserEvent.detail === 2)) {
-				// keybinding (list service command) OR double click -> close widget and goto target
+			} else if (e.browserEvent instanceof KeyboardEvent || (e.browserEvent instanceof MouseEvent && e.browserEvent.detail === 2) || (<GestureEvent>e.browserEvent).tapCount === 2) {
+				// keybinding (list service command)
+				// OR double click
+				// OR double tap
+				// -> close widget and goto target
 				onEvent(e.elements[0], 'goto');
 			} else {
 				// preview location
@@ -448,11 +465,11 @@ export class ReferenceWidget extends peekView.PeekViewWidget {
 		}));
 
 		// make sure things are rendered
-		dom.addClass(this.container!, 'results-loaded');
+		this.container!.classList.add('results-loaded');
 		dom.show(this._treeContainer);
 		dom.show(this._previewContainer);
 		this._splitView.layout(this._dim.width);
-		this.focus();
+		this.focusOnReferenceTree();
 
 		// pick input and a reference to begin with
 		return this._tree.setInput(this._model.groups.length === 1 ? this._model.groups[0] : this._model);
@@ -512,7 +529,7 @@ export class ReferenceWidget extends peekView.PeekViewWidget {
 		// show in editor
 		const model = ref.object;
 		if (model) {
-			const scrollType = this._preview.getModel() === model.textEditorModel ? editorCommon.ScrollType.Smooth : editorCommon.ScrollType.Immediate;
+			const scrollType = this._preview.getModel() === model.textEditorModel ? ScrollType.Smooth : ScrollType.Immediate;
 			const sel = Range.lift(reference.range).collapseToStart();
 			this._previewModelReference = ref;
 			this._preview.setModel(model.textEditorModel);

@@ -29,6 +29,11 @@ export interface IFileService {
 	readonly onDidChangeFileSystemProviderRegistrations: Event<IFileSystemProviderRegistrationEvent>;
 
 	/**
+	 * An even that is fired when a registered file system provider changes it's capabilities.
+	 */
+	readonly onDidChangeFileSystemProviderCapabilities: Event<IFileSystemProviderCapabilitiesChangeEvent>;
+
+	/**
 	 * An event that is fired when a file system provider is about to be activated. Listeners
 	 * can join this event with a long running promise to help in the activation process.
 	 */
@@ -58,12 +63,12 @@ export interface IFileService {
 	 * Allows to listen for file changes. The event will fire for every file within the opened workspace
 	 * (if any) as well as all files that have been watched explicitly using the #watch() API.
 	 */
-	readonly onFileChanges: Event<FileChangesEvent>;
+	readonly onDidFilesChange: Event<FileChangesEvent>;
 
 	/**
 	 * An event that is fired upon successful completion of a certain file operation.
 	 */
-	readonly onAfterOperation: Event<FileOperationEvent>;
+	readonly onDidRunOperation: Event<FileOperationEvent>;
 
 	/**
 	 * Resolve the properties of a file/folder identified by the resource.
@@ -390,6 +395,8 @@ export function toFileOperationResult(error: Error): FileOperationResult {
 			return FileOperationResult.FILE_NOT_FOUND;
 		case FileSystemProviderErrorCode.FileIsADirectory:
 			return FileOperationResult.FILE_IS_DIRECTORY;
+		case FileSystemProviderErrorCode.FileNotADirectory:
+			return FileOperationResult.FILE_NOT_DIRECTORY;
 		case FileSystemProviderErrorCode.NoPermissions:
 			return FileOperationResult.FILE_PERMISSION_DENIED;
 		case FileSystemProviderErrorCode.FileExists:
@@ -407,6 +414,11 @@ export interface IFileSystemProviderRegistrationEvent {
 	added: boolean;
 	scheme: string;
 	provider?: IFileSystemProvider;
+}
+
+export interface IFileSystemProviderCapabilitiesChangeEvent {
+	provider: IFileSystemProvider;
+	scheme: string;
 }
 
 export interface IFileSystemProviderActivationEvent {
@@ -461,15 +473,7 @@ export interface IFileChange {
 
 export class FileChangesEvent {
 
-	private readonly _changes: readonly IFileChange[];
-
-	constructor(changes: readonly IFileChange[]) {
-		this._changes = changes;
-	}
-
-	get changes() {
-		return this._changes;
-	}
+	constructor(public readonly changes: readonly IFileChange[]) { }
 
 	/**
 	 * Returns true if this change event contains the provided file with the given change type (if provided). In case of
@@ -483,7 +487,7 @@ export class FileChangesEvent {
 
 		const checkForChangeType = !isUndefinedOrNull(type);
 
-		return this._changes.some(change => {
+		return this.changes.some(change => {
 			if (checkForChangeType && change.type !== type) {
 				return false;
 			}
@@ -540,11 +544,11 @@ export class FileChangesEvent {
 	}
 
 	private getOfType(type: FileChangeType): IFileChange[] {
-		return this._changes.filter(change => change.type === type);
+		return this.changes.filter(change => change.type === type);
 	}
 
 	private hasType(type: FileChangeType): boolean {
-		return this._changes.some(change => {
+		return this.changes.some(change => {
 			return change.type === type;
 		});
 	}
@@ -615,11 +619,6 @@ interface IBaseStat {
 	 * it is optional.
 	 */
 	etag?: string;
-
-	/**
-	 * The resource is readonly.
-	 */
-	isReadonly?: boolean;
 }
 
 export interface IBaseStatWithMetadata extends IBaseStat {
@@ -766,6 +765,7 @@ export const enum FileOperationResult {
 	FILE_TOO_LARGE,
 	FILE_INVALID_PATH,
 	FILE_EXCEEDS_MEMORY_LIMIT,
+	FILE_NOT_DIRECTORY,
 	FILE_OTHER_ERROR
 }
 
@@ -781,8 +781,6 @@ export const HotExitConfiguration = {
 	ON_EXIT: 'onExit',
 	ON_EXIT_AND_WINDOW_CLOSE: 'onExitAndWindowClose'
 };
-
-export const CONTENT_CHANGE_EVENT_BUFFER_DELAY = 1000;
 
 export const FILES_ASSOCIATIONS_CONFIG = 'files.associations';
 export const FILES_EXCLUDE_CONFIG = 'files.exclude';
@@ -801,6 +799,7 @@ export interface IFilesConfiguration {
 		eol: string;
 		enableTrash: boolean;
 		hotExit: string;
+		saveConflictResolution: 'askUser' | 'overwriteFileOnDisk';
 	};
 }
 
@@ -823,4 +822,19 @@ export function etag(stat: { mtime: number | undefined, size: number | undefined
 	}
 
 	return stat.mtime.toString(29) + stat.size.toString(31);
+}
+
+
+export function whenProviderRegistered(file: URI, fileService: IFileService): Promise<void> {
+	if (fileService.canHandleResource(URI.from({ scheme: file.scheme }))) {
+		return Promise.resolve();
+	}
+	return new Promise((c, e) => {
+		const disposable = fileService.onDidChangeFileSystemProviderRegistrations(e => {
+			if (e.scheme === file.scheme && e.added) {
+				disposable.dispose();
+				c();
+			}
+		});
+	});
 }

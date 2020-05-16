@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as dom from 'vs/base/browser/dom';
+import { Selection } from 'vs/editor/common/core/selection';
 import { FastDomNode, createFastDomNode } from 'vs/base/browser/fastDomNode';
 import { IMouseEvent } from 'vs/base/browser/mouseEvent';
 import { onUnexpectedError } from 'vs/base/common/errors';
@@ -11,7 +12,7 @@ import { IDisposable } from 'vs/base/common/lifecycle';
 import { IPointerHandlerHelper } from 'vs/editor/browser/controller/mouseHandler';
 import { PointerHandler } from 'vs/editor/browser/controller/pointerHandler';
 import { ITextAreaHandlerHelper, TextAreaHandler } from 'vs/editor/browser/controller/textAreaHandler';
-import { IContentWidget, IContentWidgetPosition, IOverlayWidget, IOverlayWidgetPosition, IMouseTarget, IViewZoneChangeAccessor } from 'vs/editor/browser/editorBrowser';
+import { IContentWidget, IContentWidgetPosition, IOverlayWidget, IOverlayWidgetPosition, IMouseTarget, IViewZoneChangeAccessor, IEditorAriaOptions } from 'vs/editor/browser/editorBrowser';
 import { ICommandDelegate, ViewController } from 'vs/editor/browser/view/viewController';
 import { ViewOutgoingEvents } from 'vs/editor/browser/view/viewOutgoingEvents';
 import { ContentViewOverlays, MarginViewOverlays } from 'vs/editor/browser/view/viewOverlays';
@@ -36,9 +37,9 @@ import { ScrollDecorationViewPart } from 'vs/editor/browser/viewParts/scrollDeco
 import { SelectionsOverlay } from 'vs/editor/browser/viewParts/selections/selections';
 import { ViewCursors } from 'vs/editor/browser/viewParts/viewCursors/viewCursors';
 import { ViewZones } from 'vs/editor/browser/viewParts/viewZones/viewZones';
-import { Cursor } from 'vs/editor/common/controller/cursor';
 import { Position } from 'vs/editor/common/core/position';
-import { IConfiguration } from 'vs/editor/common/editorCommon';
+import { Range } from 'vs/editor/common/core/range';
+import { IConfiguration, ScrollType } from 'vs/editor/common/editorCommon';
 import { RenderingContext } from 'vs/editor/common/view/renderingContext';
 import { ViewContext } from 'vs/editor/common/view/viewContext';
 import { ViewEventDispatcher } from 'vs/editor/common/view/viewEventDispatcher';
@@ -48,6 +49,7 @@ import { ViewEventHandler } from 'vs/editor/common/viewModel/viewEventHandler';
 import { IViewModel } from 'vs/editor/common/viewModel/viewModel';
 import { IThemeService, getThemeTypeSelector } from 'vs/platform/theme/common/themeService';
 import { EditorOption } from 'vs/editor/common/config/editorOptions';
+import { PointerHandlerLastRenderData } from 'vs/editor/browser/controller/mouseTarget';
 
 
 export interface IContentWidgetData {
@@ -66,7 +68,7 @@ export class View extends ViewEventHandler {
 
 	private _scrollbar: EditorScrollbar;
 	private readonly _context: ViewContext;
-	private readonly _cursor: Cursor;
+	private _selections: Selection[];
 
 	// The view lines
 	private viewLines: ViewLines;
@@ -96,11 +98,10 @@ export class View extends ViewEventHandler {
 		configuration: IConfiguration,
 		themeService: IThemeService,
 		model: IViewModel,
-		cursor: Cursor,
 		outgoingEvents: ViewOutgoingEvents
 	) {
 		super();
-		this._cursor = cursor;
+		this._selections = [new Selection(1, 1, 1, 1)];
 		this._renderAnimationFrame = null;
 		this.outgoingEvents = outgoingEvents;
 
@@ -113,10 +114,10 @@ export class View extends ViewEventHandler {
 		this.eventDispatcher.addEventHandler(this);
 
 		// The view context is passed on to most classes (basically to reduce param. counts in ctors)
-		this._context = new ViewContext(configuration, themeService.getTheme(), model, this.eventDispatcher);
+		this._context = new ViewContext(configuration, themeService.getColorTheme(), model, this.eventDispatcher);
 
-		this._register(themeService.onThemeChange(theme => {
-			this._context.theme = theme;
+		this._register(themeService.onDidColorThemeChange(theme => {
+			this._context.theme.update(theme);
 			this.eventDispatcher.emit(new viewEvents.ViewThemeChangedEvent());
 			this.render(true, false);
 		}));
@@ -134,6 +135,8 @@ export class View extends ViewEventHandler {
 
 		this.domNode = createFastDomNode(document.createElement('div'));
 		this.domNode.setClassName(this.getEditorClassName());
+		// Set role 'code' for better screen reader support https://github.com/microsoft/vscode/issues/93438
+		this.domNode.setAttribute('role', 'code');
 
 		this.overflowGuardContainer = createFastDomNode(document.createElement('div'));
 		PartFingerprints.write(this.overflowGuardContainer, PartFingerprint.OverflowGuard);
@@ -222,11 +225,7 @@ export class View extends ViewEventHandler {
 		// Pointer handler
 		this.pointerHandler = this._register(new PointerHandler(this._context, viewController, this.createPointerHandlerHelper()));
 
-		this._register(model.addEventListener((events: viewEvents.ViewEvent[]) => {
-			this.eventDispatcher.emitMany(events);
-		}));
-
-		this._register(this._cursor.addEventListener((events: viewEvents.ViewEvent[]) => {
+		this._register(model.addViewEventListener((events: viewEvents.ViewEvent[]) => {
 			this.eventDispatcher.emitMany(events);
 		}));
 	}
@@ -244,8 +243,10 @@ export class View extends ViewEventHandler {
 				this.focus();
 			},
 
-			getLastViewCursorsRenderData: () => {
-				return this.viewCursors.getLastRenderData() || [];
+			getLastRenderData: (): PointerHandlerLastRenderData => {
+				const lastViewCursorsRenderData = this.viewCursors.getLastRenderData() || [];
+				const lastTextareaPosition = this._textAreaHandler.getLastRenderData();
+				return new PointerHandlerLastRenderData(lastViewCursorsRenderData, lastTextareaPosition);
 			},
 			shouldSuppressMouseDownOnViewZone: (viewZoneId: string) => {
 				return this.viewZones.shouldSuppressMouseDownOnViewZone(viewZoneId);
@@ -305,9 +306,16 @@ export class View extends ViewEventHandler {
 		this._applyLayout();
 		return false;
 	}
+	public onContentSizeChanged(e: viewEvents.ViewContentSizeChangedEvent): boolean {
+		this.outgoingEvents.emitContentSizeChange(e);
+		return false;
+	}
+	public onCursorStateChanged(e: viewEvents.ViewCursorStateChangedEvent): boolean {
+		this._selections = e.selections;
+		return false;
+	}
 	public onFocusChanged(e: viewEvents.ViewFocusChangedEvent): boolean {
 		this.domNode.setClassName(this.getEditorClassName());
-		this._context.model.setHasFocus(e.isFocused);
 		if (e.isFocused) {
 			this.outgoingEvents.emitViewFocusGained();
 		} else {
@@ -394,7 +402,7 @@ export class View extends ViewEventHandler {
 		this._context.model.setViewport(partialViewportData.startLineNumber, partialViewportData.endLineNumber, partialViewportData.centeredLineNumber);
 
 		const viewportData = new ViewportData(
-			this._cursor.getViewSelections(),
+			this._selections,
 			partialViewportData,
 			this._context.viewLayout.getWhitespaceViewportData(),
 			this._context.model
@@ -435,11 +443,11 @@ export class View extends ViewEventHandler {
 	}
 
 	public restoreState(scrollPosition: { scrollLeft: number; scrollTop: number; }): void {
-		this._context.viewLayout.setScrollPositionNow({ scrollTop: scrollPosition.scrollTop });
+		this._context.viewLayout.setScrollPosition({ scrollTop: scrollPosition.scrollTop }, ScrollType.Immediate);
 		this._context.model.tokenizeViewport();
 		this._renderNow();
 		this.viewLines.updateLineWidths();
-		this._context.viewLayout.setScrollPositionNow({ scrollLeft: scrollPosition.scrollLeft });
+		this._context.viewLayout.setScrollPosition({ scrollLeft: scrollPosition.scrollLeft }, ScrollType.Immediate);
 	}
 
 	public getOffsetForColumn(modelLineNumber: number, modelColumn: number): number {
@@ -457,7 +465,11 @@ export class View extends ViewEventHandler {
 	}
 
 	public getTargetAtClientPoint(clientX: number, clientY: number): IMouseTarget | null {
-		return this.pointerHandler.getTargetAtClientPoint(clientX, clientY);
+		const mouseTarget = this.pointerHandler.getTargetAtClientPoint(clientX, clientY);
+		if (!mouseTarget) {
+			return null;
+		}
+		return ViewOutgoingEvents.convertViewToModelMouseTarget(mouseTarget, this._context.model.coordinatesConverter);
 	}
 
 	public createOverviewRuler(cssClassName: string): OverviewRuler {
@@ -503,6 +515,10 @@ export class View extends ViewEventHandler {
 		this._textAreaHandler.refreshFocusState();
 	}
 
+	public setAriaOptions(options: IEditorAriaOptions): void {
+		this._textAreaHandler.setAriaOptions(options);
+	}
+
 	public addContentWidget(widgetData: IContentWidgetData): void {
 		this.contentWidgets.addWidget(widgetData.widget);
 		this.layoutContentWidget(widgetData);
@@ -510,10 +526,15 @@ export class View extends ViewEventHandler {
 	}
 
 	public layoutContentWidget(widgetData: IContentWidgetData): void {
-		const newPosition = widgetData.position ? widgetData.position.position : null;
-		const newRange = widgetData.position ? widgetData.position.range || null : null;
+		let newRange = widgetData.position ? widgetData.position.range || null : null;
+		if (newRange === null) {
+			const newPosition = widgetData.position ? widgetData.position.position : null;
+			if (newPosition !== null) {
+				newRange = new Range(newPosition.lineNumber, newPosition.column, newPosition.lineNumber, newPosition.column);
+			}
+		}
 		const newPreference = widgetData.position ? widgetData.position.preference : null;
-		this.contentWidgets.setWidgetPosition(widgetData.widget, newPosition, newRange, newPreference);
+		this.contentWidgets.setWidgetPosition(widgetData.widget, newRange, newPreference);
 		this._scheduleRender();
 	}
 
@@ -552,4 +573,3 @@ function safeInvokeNoArg(func: Function): any {
 		onUnexpectedError(e);
 	}
 }
-

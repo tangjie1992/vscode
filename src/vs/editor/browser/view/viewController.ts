@@ -37,12 +37,12 @@ export interface IMouseDispatchData {
 export interface ICommandDelegate {
 	executeEditorCommand(editorCommand: CoreEditorCommand, args: any): void;
 
-	paste(source: string, text: string, pasteOnNewLine: boolean, multicursorText: string[] | null): void;
-	type(source: string, text: string): void;
-	replacePreviousChar(source: string, text: string, replaceCharCnt: number): void;
-	compositionStart(source: string): void;
-	compositionEnd(source: string): void;
-	cut(source: string): void;
+	paste(text: string, pasteOnNewLine: boolean, multicursorText: string[] | null, mode: string | null): void;
+	type(text: string): void;
+	replacePreviousChar(text: string, replaceCharCnt: number): void;
+	startComposition(): void;
+	endComposition(): void;
+	cut(): void;
 }
 
 export class ViewController {
@@ -69,33 +69,33 @@ export class ViewController {
 		this.commandDelegate.executeEditorCommand(editorCommand, args);
 	}
 
-	public paste(source: string, text: string, pasteOnNewLine: boolean, multicursorText: string[] | null): void {
-		this.commandDelegate.paste(source, text, pasteOnNewLine, multicursorText);
+	public paste(text: string, pasteOnNewLine: boolean, multicursorText: string[] | null, mode: string | null): void {
+		this.commandDelegate.paste(text, pasteOnNewLine, multicursorText, mode);
 	}
 
-	public type(source: string, text: string): void {
-		this.commandDelegate.type(source, text);
+	public type(text: string): void {
+		this.commandDelegate.type(text);
 	}
 
-	public replacePreviousChar(source: string, text: string, replaceCharCnt: number): void {
-		this.commandDelegate.replacePreviousChar(source, text, replaceCharCnt);
+	public replacePreviousChar(text: string, replaceCharCnt: number): void {
+		this.commandDelegate.replacePreviousChar(text, replaceCharCnt);
 	}
 
-	public compositionStart(source: string): void {
-		this.commandDelegate.compositionStart(source);
+	public compositionStart(): void {
+		this.commandDelegate.startComposition();
 	}
 
-	public compositionEnd(source: string): void {
-		this.commandDelegate.compositionEnd(source);
+	public compositionEnd(): void {
+		this.commandDelegate.endComposition();
 	}
 
-	public cut(source: string): void {
-		this.commandDelegate.cut(source);
+	public cut(): void {
+		this.commandDelegate.cut();
 	}
 
-	public setSelection(source: string, modelSelection: Selection): void {
+	public setSelection(modelSelection: Selection): void {
 		this.commandDelegate.executeEditorCommand(CoreNavigationCommands.SetSelection, {
-			source: source,
+			source: 'keyboard',
 			selection: modelSelection
 		});
 	}
@@ -133,7 +133,9 @@ export class ViewController {
 	}
 
 	public dispatchMouse(data: IMouseDispatchData): void {
-		const selectionClipboardIsOn = (platform.isLinux && this.configuration.options.get(EditorOption.selectionClipboard));
+		const options = this.configuration.options;
+		const selectionClipboardIsOn = (platform.isLinux && options.get(EditorOption.selectionClipboard));
+		const columnSelection = options.get(EditorOption.columnSelection);
 		if (data.middleButton && !selectionClipboardIsOn) {
 			this._columnSelect(data.position, data.mouseColumn, data.inSelectionMode);
 		} else if (data.startedOnLineNumbers) {
@@ -196,7 +198,11 @@ export class ViewController {
 					if (data.altKey) {
 						this._columnSelect(data.position, data.mouseColumn, true);
 					} else {
-						this._moveToSelect(data.position);
+						if (columnSelection) {
+							this._columnSelect(data.position, data.mouseColumn, true);
+						} else {
+							this._moveToSelect(data.position);
+						}
 					}
 				} else {
 					this.moveTo(data.position);

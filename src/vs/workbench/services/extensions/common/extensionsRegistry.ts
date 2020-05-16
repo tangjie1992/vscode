@@ -250,6 +250,11 @@ export const schema: IJSONSchema = {
 						body: 'onDebugInitialConfigurations'
 					},
 					{
+						label: 'onDebugDynamicConfigurations',
+						description: nls.localize('vscode.extension.activationEvents.onDebugDynamicConfigurations', 'An activation event emitted whenever a list of all debug configurations needs to be created (and all provideDebugConfigurations methods for the "dynamic" scope need to be called).'),
+						body: 'onDebugDynamicConfigurations'
+					},
+					{
 						label: 'onDebugResolve',
 						description: nls.localize('vscode.extension.activationEvents.onDebugResolve', 'An activation event emitted whenever a debug session with the specific type is about to be launched (and a corresponding resolveDebugConfiguration method needs to be called).'),
 						body: 'onDebugResolve:${6:type}'
@@ -288,6 +293,11 @@ export const schema: IJSONSchema = {
 						label: 'onUri',
 						body: 'onUri',
 						description: nls.localize('vscode.extension.activationEvents.onUri', 'An activation event emitted whenever a system-wide Uri directed towards this extension is open.'),
+					},
+					{
+						label: 'onCustomEditor',
+						body: 'onCustomEditor:${9:viewType}',
+						description: nls.localize('vscode.extension.activationEvents.onCustomEditor', 'An activation event emitted whenever the specified custom editor becomes visible.'),
 					},
 					{
 						label: '*',
@@ -357,10 +367,19 @@ export const schema: IJSONSchema = {
 			}
 		},
 		extensionKind: {
-			description: nls.localize('extensionKind', "Define the kind of an extension. `ui` extensions are installed and run on the local machine while `workspace` extensions are run on the remote."),
-			oneOf: [{ type: 'array', items: extensionKindSchema }, extensionKindSchema],
-			default: 'workspace',
+			description: nls.localize('extensionKind', "Define the kind of an extension. `ui` extensions are installed and run on the local machine while `workspace` extensions run on the remote."),
+			type: 'array',
+			items: extensionKindSchema,
+			default: ['workspace'],
 			defaultSnippets: [
+				{
+					body: ['ui'],
+					description: nls.localize('extensionKind.ui', "Define an extension which can run only on the local machine when connected to remote window.")
+				},
+				{
+					body: ['workspace'],
+					description: nls.localize('extensionKind.workspace', "Define an extension which can run only on the remote machine when connected remote window.")
+				},
 				{
 					body: ['ui', 'workspace'],
 					description: nls.localize('extensionKind.ui-workspace', "Define an extension which can run on either side, with a preference towards running on the local machine.")

@@ -9,6 +9,7 @@ import { MenuBarVisibility } from 'vs/platform/windows/common/windows';
 import { ILayoutService } from 'vs/platform/layout/browser/layoutService';
 import { Part } from 'vs/workbench/browser/part';
 import { Dimension } from 'vs/base/browser/dom';
+import { Direction } from 'vs/base/browser/ui/grid/grid';
 
 export const IWorkbenchLayoutService = createDecorator<IWorkbenchLayoutService>('layoutService');
 
@@ -25,6 +26,26 @@ export const enum Position {
 	LEFT,
 	RIGHT,
 	BOTTOM
+}
+
+export function positionToString(position: Position): string {
+	switch (position) {
+		case Position.LEFT: return 'left';
+		case Position.RIGHT: return 'right';
+		case Position.BOTTOM: return 'bottom';
+	}
+
+	return 'bottom';
+}
+
+const positionsByString: { [key: string]: Position } = {
+	[positionToString(Position.LEFT)]: Position.LEFT,
+	[positionToString(Position.RIGHT)]: Position.RIGHT,
+	[positionToString(Position.BOTTOM)]: Position.BOTTOM
+};
+
+export function positionFromString(str: string): Position {
+	return positionsByString[str];
 }
 
 export interface IWorkbenchLayoutService extends ILayoutService {
@@ -73,6 +94,11 @@ export interface IWorkbenchLayoutService extends ILayoutService {
 	hasFocus(part: Parts): boolean;
 
 	/**
+	 * Focuses the part. If the part is not visible this is a noop.
+	 */
+	focusPart(part: Parts): void;
+
+	/**
 	 * Returns the parts HTML element, if there is one.
 	 */
 	getContainer(part: Parts): HTMLElement | undefined;
@@ -91,11 +117,6 @@ export interface IWorkbenchLayoutService extends ILayoutService {
 	 * Set activity bar hidden or not
 	 */
 	setActivityBarHidden(hidden: boolean): void;
-
-	/**
-	 * Number of pixels (adjusted for zooming) that the title bar (if visible) pushes down the workbench contents.
-	 */
-	getTitleBarOffset(): number;
 
 	/**
 	 *
@@ -165,11 +186,6 @@ export interface IWorkbenchLayoutService extends ILayoutService {
 	getWorkbenchContainer(): HTMLElement;
 
 	/**
-	 * Returns the element that contains the workbench.
-	 */
-	getWorkbenchElement(): HTMLElement;
-
-	/**
 	 * Toggles the workbench in and out of zen mode - parts get hidden and window goes fullscreen.
 	 */
 	toggleZenMode(): void;
@@ -194,7 +210,6 @@ export interface IWorkbenchLayoutService extends ILayoutService {
 	 */
 	registerPart(part: Part): void;
 
-
 	/**
 	 * Returns whether the window is maximized.
 	 */
@@ -204,4 +219,14 @@ export interface IWorkbenchLayoutService extends ILayoutService {
 	 * Updates the maximized state of the window.
 	 */
 	updateWindowMaximizedState(maximized: boolean): void;
+
+	/**
+	 * Returns the next visible view part in a given direction
+	 */
+	getVisibleNeighborPart(part: Parts, direction: Direction): Parts | undefined;
+
+	/**
+	 * True if a default layout with default editors was applied at startup
+	 */
+	readonly openedDefaultEditors: boolean;
 }

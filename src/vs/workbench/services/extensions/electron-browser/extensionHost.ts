@@ -6,6 +6,7 @@
 import * as nls from 'vs/nls';
 import { ChildProcess, fork } from 'child_process';
 import { Server, Socket, createServer } from 'net';
+import { CrashReporterStartOptions } from 'electron';
 import { getPathFromAmdModule } from 'vs/base/common/amd';
 import { timeout } from 'vs/base/common/async';
 import { toErrorMessage } from 'vs/base/common/errorMessage';
@@ -36,9 +37,13 @@ import { IExtensionDescription } from 'vs/platform/extensions/common/extensions'
 import { parseExtensionDevOptions } from '../common/extensionDevOptions';
 import { VSBuffer } from 'vs/base/common/buffer';
 import { IExtensionHostDebugService } from 'vs/platform/debug/common/extensionHostDebug';
-import { IExtensionHostStarter } from 'vs/workbench/services/extensions/common/extensions';
+import { IExtensionHostStarter, ExtensionHostLogFileName } from 'vs/workbench/services/extensions/common/extensions';
 import { isUntitledWorkspace } from 'vs/platform/workspaces/common/workspaces';
 import { IHostService } from 'vs/workbench/services/host/browser/host';
+import { joinPath } from 'vs/base/common/resources';
+import { Registry } from 'vs/platform/registry/common/platform';
+import { IOutputChannelRegistry, Extensions } from 'vs/workbench/services/output/common/output';
+import { INativeWorkbenchEnvironmentService } from 'vs/workbench/services/environment/electron-browser/environmentService';
 
 export class ExtensionHostProcessWorker implements IExtensionHostStarter {
 
@@ -65,6 +70,8 @@ export class ExtensionHostProcessWorker implements IExtensionHostStarter {
 	private _extensionHostConnection: Socket | null;
 	private _messageProtocol: Promise<PersistentProtocol> | null;
 
+	private readonly _extensionHostLogFile: URI;
+
 	constructor(
 		private readonly _autoStart: boolean,
 		private readonly _extensions: Promise<IExtensionDescription[]>,
@@ -73,7 +80,7 @@ export class ExtensionHostProcessWorker implements IExtensionHostStarter {
 		@INotificationService private readonly _notificationService: INotificationService,
 		@IElectronService private readonly _electronService: IElectronService,
 		@ILifecycleService private readonly _lifecycleService: ILifecycleService,
-		@IWorkbenchEnvironmentService private readonly _environmentService: IWorkbenchEnvironmentService,
+		@IWorkbenchEnvironmentService private readonly _environmentService: INativeWorkbenchEnvironmentService,
 		@ITelemetryService private readonly _telemetryService: ITelemetryService,
 		@ILogService private readonly _logService: ILogService,
 		@ILabelService private readonly _labelService: ILabelService,
@@ -95,6 +102,8 @@ export class ExtensionHostProcessWorker implements IExtensionHostStarter {
 		this._extensionHostConnection = null;
 		this._messageProtocol = null;
 
+		this._extensionHostLogFile = joinPath(this._extensionHostLogsLocation, `${ExtensionHostLogFileName}.log`);
+
 		this._toDispose.add(this._onExit);
 		this._toDispose.add(this._lifecycleService.onWillShutdown(e => this._onWillShutdown(e)));
 		this._toDispose.add(this._lifecycleService.onShutdown(reason => this.terminate()));
@@ -112,7 +121,7 @@ export class ExtensionHostProcessWorker implements IExtensionHostStarter {
 		const globalExitListener = () => this.terminate();
 		process.once('exit', globalExitListener);
 		this._toDispose.add(toDisposable(() => {
-			process.removeListener('exit', globalExitListener);
+			process.removeListener('exit' as 'loaded', globalExitListener); // https://github.com/electron/electron/issues/21475
 		}));
 	}
 
@@ -158,10 +167,21 @@ export class ExtensionHostProcessWorker implements IExtensionHostStarter {
 						'--nolazy',
 						(this._isExtensionDevDebugBrk ? '--inspect-brk=' : '--inspect=') + portNumber
 					];
+				} else {
+					opts.execArgv = ['--inspect-port=0'];
 				}
 
-				const crashReporterOptions = undefined; // TODO@electron pass this in as options to the extension host after verifying this actually works
-				if (crashReporterOptions) {
+				// Enable the crash reporter depending on environment for local reporting
+				const crashesDirectory = this._environmentService.crashReporterDirectory;
+				if (crashesDirectory) {
+					const crashReporterOptions: CrashReporterStartOptions = {
+						companyName: product.crashReporter?.companyName || 'Microsoft',
+						productName: product.crashReporter?.productName || product.nameShort,
+						submitURL: '',
+						uploadToServer: false,
+						crashesDirectory
+					};
+
 					opts.env.CRASH_REPORTER_START_OPTIONS = JSON.stringify(crashReporterOptions);
 				}
 
@@ -190,7 +210,7 @@ export class ExtensionHostProcessWorker implements IExtensionHostStarter {
 				onDebouncedOutput(output => {
 					const inspectorUrlMatch = output.data && output.data.match(/ws:\/\/([^\s]+:(\d+)\/[^\s]+)/);
 					if (inspectorUrlMatch) {
-						if (!this._environmentService.isBuilt) {
+						if (!this._environmentService.isBuilt && !this._isExtensionDevTestFromCli) {
 							console.log(`%c[Extension Host] %cdebugger inspector at chrome-devtools://devtools/bundled/inspector.html?experiments=true&v8only=true&ws=${inspectorUrlMatch[1]}`, 'color: blue', 'color:');
 						}
 						if (!this._inspectPort) {
@@ -198,9 +218,11 @@ export class ExtensionHostProcessWorker implements IExtensionHostStarter {
 							this._onDidSetInspectPort.fire();
 						}
 					} else {
-						console.group('Extension Host');
-						console.log(output.data, ...output.format);
-						console.groupEnd();
+						if (!this._isExtensionDevTestFromCli) {
+							console.group('Extension Host');
+							console.log(output.data, ...output.format);
+							console.groupEnd();
+						}
 					}
 				});
 
@@ -283,22 +305,22 @@ export class ExtensionHostProcessWorker implements IExtensionHostStarter {
 		const expected = this._environmentService.debugExtensionHost.port;
 		const port = await findFreePort(expected, 10 /* try 10 ports */, 5000 /* try up to 5 seconds */);
 
-		if (!port) {
-			console.warn('%c[Extension Host] %cCould not find a free port for debugging', 'color: blue', 'color:');
-			return 0;
+		if (!this._isExtensionDevTestFromCli) {
+			if (!port) {
+				console.warn('%c[Extension Host] %cCould not find a free port for debugging', 'color: blue', 'color:');
+			} else {
+				if (port !== expected) {
+					console.warn(`%c[Extension Host] %cProvided debugging port ${expected} is not free, using ${port} instead.`, 'color: blue', 'color:');
+				}
+				if (this._isExtensionDevDebugBrk) {
+					console.warn(`%c[Extension Host] %cSTOPPED on first line for debugging on port ${port}`, 'color: blue', 'color:');
+				} else {
+					console.info(`%c[Extension Host] %cdebugger listening on port ${port}`, 'color: blue', 'color:');
+				}
+			}
 		}
 
-		if (port !== expected) {
-			console.warn(`%c[Extension Host] %cProvided debugging port ${expected} is not free, using ${port} instead.`, 'color: blue', 'color:');
-		}
-		if (this._isExtensionDevDebugBrk) {
-			console.warn(`%c[Extension Host] %cSTOPPED on first line for debugging on port ${port}`, 'color: blue', 'color:');
-		} else {
-			console.info(`%c[Extension Host] %cdebugger listening on port ${port}`, 'color: blue', 'color:');
-		}
-		return port;
-
-
+		return port || 0;
 	}
 
 	private _tryExtHostHandshake(): Promise<PersistentProtocol> {
@@ -371,6 +393,9 @@ export class ExtensionHostProcessWorker implements IExtensionHostStarter {
 						// stop listening for messages here
 						disposable.dispose();
 
+						// Register log channel for exthost log
+						Registry.as<IOutputChannelRegistry>(Extensions.OutputChannels).registerChannel({ id: 'extHostLog', label: nls.localize('extension host Log', "Extension Host"), file: this._extensionHostLogFile, log: true });
+
 						// release this promise
 						resolve(protocol);
 						return;
@@ -402,7 +427,7 @@ export class ExtensionHostProcessWorker implements IExtensionHostStarter {
 						extensionDevelopmentLocationURI: this._environmentService.extensionDevelopmentLocationURI,
 						extensionTestsLocationURI: this._environmentService.extensionTestsLocationURI,
 						globalStorageHome: URI.file(this._environmentService.globalStorageHome),
-						userHome: URI.file(this._environmentService.userHome),
+						userHome: this._environmentService.userHome,
 						webviewResourceRoot: this._environmentService.webviewResourceRoot,
 						webviewCspSource: this._environmentService.webviewCspSource,
 					},
@@ -422,6 +447,7 @@ export class ExtensionHostProcessWorker implements IExtensionHostStarter {
 					telemetryInfo,
 					logLevel: this._logService.getLevel(),
 					logsLocation: this._extensionHostLogsLocation,
+					logFile: this._extensionHostLogFile,
 					autoStart: this._autoStart,
 					uiKind: UIKind.Desktop
 				};

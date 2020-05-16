@@ -46,7 +46,7 @@ export class InsertCursorAbove extends EditorAction {
 				},
 				weight: KeybindingWeight.EditorContrib
 			},
-			menubarOpts: {
+			menuOpts: {
 				menuId: MenuId.MenubarSelectionMenu,
 				group: '3_multi',
 				title: nls.localize({ key: 'miInsertCursorAbove', comment: ['&& denotes a mnemonic'] }, "&&Add Cursor Above"),
@@ -95,7 +95,7 @@ export class InsertCursorBelow extends EditorAction {
 				},
 				weight: KeybindingWeight.EditorContrib
 			},
-			menubarOpts: {
+			menuOpts: {
 				menuId: MenuId.MenubarSelectionMenu,
 				group: '3_multi',
 				title: nls.localize({ key: 'miInsertCursorBelow', comment: ['&& denotes a mnemonic'] }, "A&&dd Cursor Below"),
@@ -140,7 +140,7 @@ class InsertCursorAtEndOfEachLineSelected extends EditorAction {
 				primary: KeyMod.Shift | KeyMod.Alt | KeyCode.KEY_I,
 				weight: KeybindingWeight.EditorContrib
 			},
-			menubarOpts: {
+			menuOpts: {
 				menuId: MenuId.MenubarSelectionMenu,
 				group: '3_multi',
 				title: nls.localize({ key: 'miInsertCursorAtEndOfEachLineSelected', comment: ['&& denotes a mnemonic'] }, "Add C&&ursors to Line Ends"),
@@ -286,7 +286,7 @@ export class MultiCursorSession {
 
 		if (s.isEmpty()) {
 			// selection is empty => expand to current word
-			const word = editor.getModel().getWordAtPosition(s.getStartPosition());
+			const word = editor.getConfiguredWordAtPosition(s.getStartPosition());
 			if (!word) {
 				return null;
 			}
@@ -505,7 +505,7 @@ export class MultiCursorSelectionController extends Disposable implements IEdito
 		if (!selection.isEmpty()) {
 			return selection;
 		}
-		const word = model.getWordAtPosition(selection.getStartPosition());
+		const word = this._editor.getConfiguredWordAtPosition(selection.getStartPosition());
 		if (!word) {
 			return selection;
 		}
@@ -631,6 +631,12 @@ export class MultiCursorSelectionController extends Disposable implements IEdito
 			this._setSelections(matches.map(m => new Selection(m.range.startLineNumber, m.range.startColumn, m.range.endLineNumber, m.range.endColumn)));
 		}
 	}
+
+	public selectAllUsingSelections(selections: Selection[]): void {
+		if (selections.length > 0) {
+			this._setSelections(selections);
+		}
+	}
 }
 
 export abstract class MultiCursorSelectionControllerAction extends EditorAction {
@@ -662,7 +668,7 @@ export class AddSelectionToNextFindMatchAction extends MultiCursorSelectionContr
 				primary: KeyMod.CtrlCmd | KeyCode.KEY_D,
 				weight: KeybindingWeight.EditorContrib
 			},
-			menubarOpts: {
+			menuOpts: {
 				menuId: MenuId.MenubarSelectionMenu,
 				group: '3_multi',
 				title: nls.localize({ key: 'miAddSelectionToNextFindMatch', comment: ['&& denotes a mnemonic'] }, "Add &&Next Occurrence"),
@@ -682,7 +688,7 @@ export class AddSelectionToPreviousFindMatchAction extends MultiCursorSelectionC
 			label: nls.localize('addSelectionToPreviousFindMatch', "Add Selection To Previous Find Match"),
 			alias: 'Add Selection To Previous Find Match',
 			precondition: undefined,
-			menubarOpts: {
+			menuOpts: {
 				menuId: MenuId.MenubarSelectionMenu,
 				group: '3_multi',
 				title: nls.localize({ key: 'miAddSelectionToPreviousFindMatch', comment: ['&& denotes a mnemonic'] }, "Add P&&revious Occurrence"),
@@ -740,7 +746,7 @@ export class SelectHighlightsAction extends MultiCursorSelectionControllerAction
 				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KEY_L,
 				weight: KeybindingWeight.EditorContrib
 			},
-			menubarOpts: {
+			menuOpts: {
 				menuId: MenuId.MenubarSelectionMenu,
 				group: '3_multi',
 				title: nls.localize({ key: 'miSelectHighlights', comment: ['&& denotes a mnemonic'] }, "Select All &&Occurrences"),
@@ -759,13 +765,13 @@ export class CompatChangeAll extends MultiCursorSelectionControllerAction {
 			id: 'editor.action.changeAll',
 			label: nls.localize('changeAll.label', "Change All Occurrences"),
 			alias: 'Change All Occurrences',
-			precondition: ContextKeyExpr.and(EditorContextKeys.writable, EditorContextKeys.editorTextFocus, EditorContextKeys.hasRenameProvider.toNegated()),
+			precondition: ContextKeyExpr.and(EditorContextKeys.writable, EditorContextKeys.editorTextFocus),
 			kbOpts: {
 				kbExpr: EditorContextKeys.editorTextFocus,
 				primary: KeyMod.CtrlCmd | KeyCode.F2,
 				weight: KeybindingWeight.EditorContrib
 			},
-			menuOpts: {
+			contextMenuOpts: {
 				group: '1_modification',
 				order: 1.2
 			}
@@ -780,11 +786,13 @@ class SelectionHighlighterState {
 	public readonly searchText: string;
 	public readonly matchCase: boolean;
 	public readonly wordSeparators: string | null;
+	public readonly modelVersionId: number;
 
-	constructor(searchText: string, matchCase: boolean, wordSeparators: string | null) {
+	constructor(searchText: string, matchCase: boolean, wordSeparators: string | null, modelVersionId: number) {
 		this.searchText = searchText;
 		this.matchCase = matchCase;
 		this.wordSeparators = wordSeparators;
+		this.modelVersionId = modelVersionId;
 	}
 
 	/**
@@ -801,6 +809,7 @@ class SelectionHighlighterState {
 			a.searchText === b.searchText
 			&& a.matchCase === b.matchCase
 			&& a.wordSeparators === b.wordSeparators
+			&& a.modelVersionId === b.modelVersionId
 		);
 	}
 }
@@ -850,6 +859,11 @@ export class SelectionHighlighter extends Disposable implements IEditorContribut
 		}));
 		this._register(editor.onDidChangeModel((e) => {
 			this._setState(null);
+		}));
+		this._register(editor.onDidChangeModelContent((e) => {
+			if (this._isEnabled) {
+				this.updateSoon.schedule();
+			}
 		}));
 		this._register(CommonFindController.get(editor).getState().onFindReplaceStateChange((e) => {
 			this._update();
@@ -933,7 +947,7 @@ export class SelectionHighlighter extends Disposable implements IEditorContribut
 			}
 		}
 
-		return new SelectionHighlighterState(r.searchText, r.matchCase, r.wholeWord ? editor.getOption(EditorOption.wordSeparators) : null);
+		return new SelectionHighlighterState(r.searchText, r.matchCase, r.wholeWord ? editor.getOption(EditorOption.wordSeparators) : null, editor.getModel().getVersionId());
 	}
 
 	private _setState(state: SelectionHighlighterState | null): void {
